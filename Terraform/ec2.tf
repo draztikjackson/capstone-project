@@ -38,6 +38,12 @@ resource "aws_iam_role_policy_attachment" "ssm" {
   policy_arn = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
 }
 
+# Allow EC2 to pull Docker images from Amazon ECR
+resource "aws_iam_role_policy_attachment" "ecr_read" {
+  role       = aws_iam_role.ec2_role.name
+  policy_arn = "arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly"
+}
+
 # Instance profile connects the IAM role to EC2
 resource "aws_iam_instance_profile" "ec2_profile" {
   name = "capstone-project-ec2-profile"
