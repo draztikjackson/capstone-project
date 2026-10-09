@@ -89,3 +89,94 @@ jobs:
           docker tag capstone-web:$IMAGE_TAG $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
           docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
 
+          
+      - name: Deploy Docker image to EC2 using SSM
+        shell: bash
+        env:
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          import subprocess
+          import sys
+          import time
+
+          region = "af-south-1"
+          instance_id = "i-059fd089c2ed7d0c8"
+          image = (
+              "317345516803.dkr.ecr.af-south-1.amazonaws.com/"
+              f"capstone-web:{os.environ['IMAGE_TAG']}"
+          )
+
+          commands = [
+              "set -e",
+              f"aws ecr get-login-password --region {region} | "
+              "sudo docker login --username AWS --password-stdin "
+              "317345516803.dkr.ecr.af-south-1.amazonaws.com",
+              f"sudo docker pull {image}",
+              "sudo docker stop capstone-web || true",
+              "sudo docker rm capstone-web || true",
+              f"sudo docker run -d --name capstone-web "
+              f"--restart unless-stopped -p 80:80 {image}",
+              "sleep 5",
+              "curl --fail --silent --show-error http://localhost/health"
+          ]
+
+          result = subprocess.run(
+              [
+                  "aws", "ssm", "send-command",
+                  "--instance-ids", instance_id,
+                  "--document-name", "AWS-RunShellScript",
+                  "--parameters", json.dumps({"commands": commands}),
+                  "--query", "Command.CommandId",
+                  "--output", "text"
+              ],
+              check=True,
+              capture_output=True,
+              text=True
+          )
+
+          command_id = result.stdout.strip()
+          print(f"SSM deployment command: {command_id}", flush=True)
+
+          for attempt in range(30):
+              time.sleep(5)
+              result = subprocess.run(
+                  [
+                      "aws", "ssm", "get-command-invocation",
+                      "--command-id", command_id,
+                      "--instance-id", instance_id,
+                      "--output", "json"
+                  ],
+                  capture_output=True,
+                  text=True
+              )
+
+              if result.returncode != 0:
+                  print("Waiting for SSM command invocation...", flush=True)
+                  continue
+
+              invocation = json.loads(result.stdout)
+              status = invocation["Status"]
+
+              if status == "Success":
+                  print(invocation.get("StandardOutputContent", ""))
+                  print("EC2 deployment succeeded!", flush=True)
+                  sys.exit(0)
+
+              if status in (
+                  "Failed", "Cancelled", "TimedOut",
+                  "Cancelling", "Undeliverable", "Terminated"
+              ):
+                  print(invocation.get("StandardErrorContent", ""))
+                  print(f"Deployment failed: {status}", file=sys.stderr)
+                  sys.exit(1)
+
+              print(f"Deployment status: {status}", flush=True)
+
+          print("Deployment timed out.", file=sys.stderr)
+          sys.exit(1)
+          PY
+
+
