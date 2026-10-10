@@ -11,56 +11,37 @@ permissions:
   contents: read
 
 jobs:
-  build-and-deploy:
-    name: Build and Deploy
+  terraform-validate:
+    name: Validate Terraform
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Check GitHub workflow identity
-        run: |                                       
-          echo "Repository: $GITHUB_REPOSITORY"
-          echo "Ref: $GITHUB_REF"
-          echo "Event: $GITHUB_EVENT_NAME"
-          if [ -n "$ACTIONS_ID_TOKEN_REQUEST_URL" ]; then
-            echo "OIDC request URL available: true"
-          else
-            echo "OIDC request URL available: false"
-          fi
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v3
 
-          
-    
-      - name: Inspect GitHub OIDC claims
-        shell: bash
-        run: |
-          python3 - <<'PY'
-          import os
-          import json
-          import base64
-          import urllib.request
+      - name: Check Terraform formatting
+        working-directory: Terraform
+        run: terraform fmt -check -recursive
 
-          request_url = os.environ["ACTIONS_ID_TOKEN_REQUEST_URL"]
-          request_token = os.environ["ACTIONS_ID_TOKEN_REQUEST_TOKEN"]
+      - name: Initialize Terraform without backend
+        working-directory: Terraform
+        run: terraform init -backend=false
 
-          url = request_url + "&audience=sts.amazonaws.com"
-          request = urllib.request.Request(
-              url,
-              headers={"Authorization": f"Bearer {request_token}"}
-          )
+      - name: Validate Terraform configuration
+        working-directory: Terraform
+        run: terraform validate
 
-          with urllib.request.urlopen(request) as response:
-              oidc_token = json.load(response)["value"]
+  build-and-deploy:
+    name: Build and Deploy
+    needs: terraform-validate
+    runs-on: ubuntu-latest
 
-          payload = oidc_token.split(".")[1]
-          payload += "=" * (-len(payload) % 4)
-          claims = json.loads(base64.urlsafe_b64decode(payload))
-
-          for key in ("iss", "aud", "sub", "repository", "ref", "event_name"):
-              print(f"{key}: {claims.get(key)}")
-          PY
-
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
@@ -71,7 +52,6 @@ jobs:
       - name: Confirm AWS identity
         run: aws sts get-caller-identity
 
-        
       - name: Login to Amazon ECR
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
@@ -89,7 +69,6 @@ jobs:
           docker tag capstone-web:$IMAGE_TAG $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
           docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
 
-          
       - name: Deploy Docker image to EC2 using SSM
         shell: bash
         env:
@@ -178,5 +157,3 @@ jobs:
           print("Deployment timed out.", file=sys.stderr)
           sys.exit(1)
           PY
-
-
