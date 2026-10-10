@@ -34,6 +34,35 @@ jobs:
         working-directory: Terraform
         run: terraform validate
 
+  terraform-plan:
+    name: Terraform Plan
+    needs: terraform-validate
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v3
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::317345516803:role/capstone-project-terraform-role
+          aws-region: af-south-1
+
+      - name: Initialize Terraform
+        working-directory: Terraform
+        run: terraform init -lockfile=readonly
+
+      - name: Terraform Plan
+        working-directory: Terraform
+        env:
+          TF_VAR_db_password: ${{ secrets.TF_VAR_db_password }}
+          TF_VAR_alert_email: ${{ secrets.TF_VAR_alert_email }}
+        run: terraform plan -lock=false -input=false -no-color
+
   build-and-deploy:
     name: Build and Deploy
     needs: terraform-validate
